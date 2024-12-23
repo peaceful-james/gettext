@@ -1,5 +1,137 @@
 # Changelog
 
+## v0.26.2
+
+* Introduces warning if plural messages are defined with the same singular
+  message and conflicting plural messages.
+* Improves performance by striping not required metadata when compiling the
+  Gettext backend.
+
+## v0.26.1
+
+  * Address backwards incompatible changes in previous release
+
+## v0.26.0
+
+This release changes the way you use Gettext. We're not crazy: it does so because doing so makes it a lot faster to compile projects that use Gettext.
+The changes *you* have to make to your code are minimal, and the old behavior is deprecated so that you will be guided on how to update.
+
+The reason for this change is that it removes compile-time dependencies from modules that used to `import` a Gettext backend. In applications such as Phoenix applications, where every view and controller `import`s the Gettext backend, this change means a lot less compilation when you make translation changes!
+
+Here's the new API. Now, instead of defining a Gettext backend (`use Gettext`) and then `import`ing that to use its macros, you need to:
+
+  1. Define a Gettext backend with `use Gettext.Backend`
+  1. Import and use its macros with `use Gettext, backend: MyApp.Gettext`.
+
+### Before and After
+
+Before this release, code using Gettext used to look something like this:
+
+```elixir
+defmodule MyApp.Gettext do
+  use Gettext, otp_app: :my_app
+end
+
+defmodule MyAppWeb.Controller do
+  import MyApp.Gettext
+end
+```
+
+This creates a compile-time dependency for every module that `import`s the Gettext backend.
+
+With this release, the above turns into:
+
+```elixir
+defmodule MyApp.Gettext do
+  use Gettext.Backend, otp_app: :my_app
+end
+
+defmodule MyAppWeb.Controller do
+  use Gettext, backend: MyApp.Gettext
+end
+```
+
+We are also updating [Phoenix](https://github.com/phoenixframework/phoenix) generators to use the new API.
+
+If you update Gettext and still use `use Gettext, otp_app: :my_app` to define a backend, Gettext will emit a warning now.
+
+### Migration with Igniter
+
+If your project is using [`igniter`](https://hex.pm/packages/igniter), you can run
+[`mix igniter.update_gettext`](https://hexdocs.pm/igniter/Mix.Tasks.Igniter.UpdateGettext.html)
+to automatically migrate to the new API.
+
+### Detailed Changelog
+
+This is a detailed list of the new things introduced in this release:
+
+  * Add `Gettext.Macros`, which contains all the macros you know and love (`*gettext`). It also contains `*gettext_with_backend` variants to explicitly pass a backend at compile time and keep extraction working.
+  * Document `lgettext/5` and `lngettext/7` callbacks in `Gettext.Backend`. These get generated in every Gettext backend.
+  * Add the `Gettext.domain/0` type.
+
+## v0.25.0
+
+  * Run merging for `mix gettext.extract`'s POT files even if they are unchanged.
+  * Allow Expo 1.0+.
+
+## v0.24.0
+
+  * Handle singular and plural messages with the same `msgid` as the same
+    message.
+
+    This change produces a `Expo.PO.DuplicateMessagesError` if you already have
+    messages with the same singular `msgid`. This can be solved by calling the
+    `expo.msguniq` mix task on your `.po` file:
+
+    ```bash
+    mix expo.msguniq \
+      priv/gettext/LOCALE/LC_MESSAGES/DOMAIN.po \
+      --output-file priv/gettext/LOCALE/LC_MESSAGES/DOMAIN.po
+    ```
+
+## v0.23.1
+
+  * Use the Hex version of the excoveralls dependency.
+
+## v0.23.0
+
+  * Add the `:custom_flags_to_keep` Gettext option.
+
+## v0.22.3
+
+  * Fix a bug with extracting translations in Elixir 1.15.0+.
+
+## v0.22.2
+
+  * Use `Code.ensure_compiled/1` instead of `Code.ensure_loaded/1` for Elixir < 1.12 compatibility.
+  * Ensure all modules are properly loaded for `mix gettext.merge`.
+  * Fix a "protected" check when extracting translations.
+
+## v0.22.1
+
+  * Put correct `Plural-Forms` header on `gettext.merge` for the first time.
+  * Fix extractor crash in case of conflicting backends.
+  * Fix to use the correct plural forms for multiple languages.
+  * Update expo to `~> 0.4.0` to fix issues with empty `msgstr`.
+
+## v0.22.0
+
+  * Deprecate (with a warning) the `--plural-forms` CLI option and the `:plural_forms` option in favor of `--plural-forms-header` and `:plural_forms_header`.
+  * Supply the `Plural-Forms` header to `Gettext.Plural` callbacks.
+  * Bump Expo requirement to `~> 0.3.0`.
+  * Add the types:
+    * `Gettext.Interpolation.bindings/0`
+    * `Gettext.Error.t/0`
+    * `Gettext.Plural.locale/0`
+    * `Gettext.Plural.pluralization_context/0`
+    * `Gettext.Plural.plural_info/0`
+  * Add the optional callbacks `Gettext.Plural.init/1` and `Gettext.Plural.plural_forms_header/1`.
+
+### Bug fixes
+
+  * Fix `--check-up-to-date` with `msgid`s split in different ways.
+  * Don't write the same file more than once in references when using `write_reference_line_numbers: false`.
+
 ## v0.21.0
 
 ### New features and improvements
@@ -92,8 +224,8 @@
 
 ## v0.17.2
 
-* Support `pgettext`
-* Consider extracted comments when merging templates during extraction
+  * Support `pgettext`
+  * Consider extracted comments when merging templates during extraction
 
 ## v0.17.1
 

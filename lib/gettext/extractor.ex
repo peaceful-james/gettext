@@ -68,9 +68,22 @@ defmodule Gettext.Extractor do
 
   Note that this function doesn't perform any operation on the filesystem.
   """
-  @spec extract(Macro.Env.t(), module, binary, binary, binary | {binary, binary}, [binary]) :: :ok
+  @spec extract(
+          Macro.Env.t(),
+          backend :: module,
+          domain :: binary | :default,
+          msgctxt :: binary,
+          id :: binary | {binary, binary},
+          extracted_comments :: [binary]
+        ) :: :ok
   def extract(%Macro.Env{} = caller, backend, domain, msgctxt, id, extracted_comments) do
     format_flag = backend.__gettext__(:interpolation).message_format()
+
+    domain =
+      case domain do
+        :default -> backend.__gettext__(:default_domain)
+        string when is_binary(string) -> string
+      end
 
     message =
       create_message_struct(
@@ -121,6 +134,8 @@ defmodule Gettext.Extractor do
               "Please set the :priv option to different directories or use Gettext " <>
               "inside each backend"
           )
+
+          acc
 
         %{} ->
           Map.put(acc, priv, backend)
@@ -220,7 +235,6 @@ defmodule Gettext.Extractor do
     #   %{path => {:merged, :unchanged | %Messages{}}, path => {:unmerged, :unchanged | %Messages{}}, path => {:new, %Messages{}}}
     Map.merge(pot_files, po_structs, &merge_existing_and_extracted(&1, &2, &3, gettext_config))
     |> Enum.map(&tag_files(&1, gettext_config))
-    |> Enum.reject(&match?({_, {_, :unchanged}}, &1))
     |> Enum.map(&dump_tagged_file/1)
   end
 
@@ -271,7 +285,8 @@ defmodule Gettext.Extractor do
   # This function "dumps" merged files and unmerged files without any changes,
   # and dumps new POT files adding an informative comment to them. This doesn't
   # write anything to disk, it just returns `{path, contents}` tuples.
-  defp dump_tagged_file({path, {_tag, po}}), do: {path, PO.compose(po)}
+  defp dump_tagged_file({path, {_tag, :unchanged}}), do: {path, :unchanged}
+  defp dump_tagged_file({path, {_tag, po}}), do: {path, {:changed, PO.compose(po)}}
 
   defp prune_unmerged(path, gettext_config) do
     merge_or_unchanged(path, %Messages{messages: []}, gettext_config)
@@ -335,10 +350,7 @@ defmodule Gettext.Extractor do
     }
   end
 
-  defp merge_message(
-         %Message.Singular{} = old,
-         %Message.Singular{comments: []} = new
-       ) do
+  defp merge_message(old, new) do
     ensure_empty_msgstr!(old)
     ensure_empty_msgstr!(new)
 
@@ -351,36 +363,15 @@ defmodule Gettext.Extractor do
         old.flags
       end
 
-    %Message.Singular{
-      msgid: old.msgid,
-      msgstr: old.msgstr,
-      msgctxt: new.msgctxt,
+    old
+    |> Message.merge(new)
+    |> Map.merge(%{
       flags: flags,
-      # The new in-memory message has no comments since it was extracted
-      # from the source code.
-      comments: old.comments,
       # We don't care about the references of the old message since the new
       # in-memory message has all the actual and current references.
       references: new.references,
       extracted_comments: new.extracted_comments
-    }
-  end
-
-  defp merge_message(%Message.Plural{} = old, %Message.Plural{comments: []} = new) do
-    ensure_empty_msgstr!(old)
-    ensure_empty_msgstr!(new)
-
-    # The logic here is the same as for %Message.Singular{}s.
-    %Message.Plural{
-      msgid: old.msgid,
-      msgctxt: new.msgctxt,
-      msgid_plural: old.msgid_plural,
-      msgstr: old.msgstr,
-      flags: old.flags,
-      comments: old.comments,
-      references: new.references,
-      extracted_comments: new.extracted_comments
-    }
+    })
   end
 
   defp ensure_empty_msgstr!(%Message.Singular{msgstr: msgstr} = message) do
@@ -390,8 +381,8 @@ defmodule Gettext.Extractor do
     end
   end
 
-  defp ensure_empty_msgstr!(%Message.Plural{msgstr: %{0 => str0, 1 => str1}} = message) do
-    if not blank?(str0) or not blank?(str1) do
+  defp ensure_empty_msgstr!(%Message.Plural{msgstr: msgstr} = message) do
+    if Enum.any?(Map.values(msgstr), &(not blank?(&1))) do
       raise Error,
             "plural message with msgid '#{IO.iodata_to_binary(message.msgid)}' has a non-empty msgstr"
     end
@@ -420,5 +411,5 @@ defmodule Gettext.Extractor do
     do: false
 
   defp protected?(%{references: refs}, pattern),
-    do: Enum.any?(refs, fn {path, _} -> Regex.match?(pattern, path) end)
+    do: refs |> List.flatten() |> Enum.any?(fn {path, _} -> Regex.match?(pattern, path) end)
 end

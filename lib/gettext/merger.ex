@@ -50,14 +50,15 @@ defmodule Gettext.Merger do
         by the references in the POT file
 
   """
-  @spec merge(Messages.t(), Messages.t(), String.t(), Keyword.t()) ::
+  @spec merge(Messages.t(), Messages.t(), String.t(), Keyword.t(), Keyword.t()) ::
           {Messages.t(), map()}
-  def merge(%Messages{} = old, %Messages{} = new, locale, opts)
+  def merge(%Messages{} = old, %Messages{} = new, locale, opts, gettext_config)
       when is_binary(locale) and is_list(opts) do
     opts = put_plural_forms_opt(opts, old, locale)
+
     stats = %{new: 0, exact_matches: 0, fuzzy_matches: 0, removed: 0, marked_as_obsolete: 0}
 
-    {messages, stats} = merge_messages(old.messages, new.messages, opts, stats)
+    {messages, stats} = merge_messages(old.messages, new.messages, opts, gettext_config, stats)
 
     po = %Messages{
       top_comments: old.top_comments,
@@ -69,10 +70,11 @@ defmodule Gettext.Merger do
     {po, stats}
   end
 
-  defp merge_messages(old, new, opts, stats) do
+  defp merge_messages(old, new, opts, gettext_config, stats) do
     fuzzy? = Keyword.fetch!(opts, :fuzzy)
     fuzzy_threshold = Keyword.fetch!(opts, :fuzzy_threshold)
     plural_forms = Keyword.fetch!(opts, :plural_forms)
+    custom_flags_to_keep = Keyword.get(gettext_config, :custom_flags_to_keep, [])
 
     old = Map.new(old, &{Message.key(&1), &1})
 
@@ -84,7 +86,9 @@ defmodule Gettext.Merger do
         case Map.fetch(old, key) do
           {:ok, exact_match} ->
             stats = update_in(stats_acc.exact_matches, &(&1 + 1))
-            {merge_two_messages(exact_match, message), {stats, Map.delete(unused, key)}}
+
+            {merge_two_messages(exact_match, message, custom_flags_to_keep),
+             {stats, Map.delete(unused, key)}}
 
           :error when fuzzy? ->
             case maybe_merge_fuzzy(message, old, key, fuzzy_threshold) do
@@ -172,37 +176,31 @@ defmodule Gettext.Merger do
   # flags: we should take the new flags and preserve the fuzzy flag
   # references: new contains the updated and most recent references
 
-  defp merge_two_messages(%Message.Singular{} = old, %Message.Singular{} = new) do
-    %Message.Singular{
-      msgctxt: new.msgctxt,
-      msgid: new.msgid,
-      msgstr: old.msgstr,
+  defp merge_two_messages(old, new, custom_flags_to_keep) do
+    old
+    |> Message.merge(new)
+    |> Map.merge(%{
       comments: old.comments,
       extracted_comments: new.extracted_comments,
-      flags: merge_flags(old, new),
+      flags: merge_flags(old, new, custom_flags_to_keep),
       references: new.references
-    }
+    })
   end
 
-  defp merge_two_messages(%Message.Plural{} = old, %Message.Plural{} = new) do
-    %Message.Plural{
-      msgctxt: new.msgctxt,
-      msgid: new.msgid,
-      msgid_plural: new.msgid_plural,
-      msgstr: old.msgstr,
-      comments: old.comments,
-      extracted_comments: new.extracted_comments,
-      flags: merge_flags(old, new),
-      references: new.references
-    }
-  end
+  defp merge_flags(old_message, new_message, custom_flags_to_keep) do
+    # Force the "fuzzy" flag.
+    flags_to_keep = Enum.uniq(["fuzzy" | custom_flags_to_keep])
 
-  defp merge_flags(old, new) do
-    if Message.has_flag?(old, "fuzzy") do
-      Message.append_flag(new, "fuzzy").flags
-    else
-      new.flags
-    end
+    %{flags: flags} =
+      Enum.reduce(flags_to_keep, new_message, fn flag, message ->
+        if Message.has_flag?(old_message, flag) do
+          Message.append_flag(message, flag)
+        else
+          message
+        end
+      end)
+
+    flags
   end
 
   @doc """
@@ -297,23 +295,20 @@ defmodule Gettext.Merger do
     %{message | comments: Enum.reject(comments, &match?("#" <> _, &1))}
   end
 
+  # TODO: simplify code here once we remove support for :plural_forms.
   defp put_plural_forms_opt(opts, messages, locale) do
     plural_mod = Application.get_env(:gettext, :plural_forms, Gettext.Plural)
+    default_nplurals = plural_mod.nplurals(Plural.plural_info(locale, messages, plural_mod))
 
-    opts =
-      Keyword.put_new_lazy(opts, :plural_forms, fn ->
-        plural_mod.nplurals(Plural.plural_info(locale, messages, plural_mod))
-      end)
+    opts = Keyword.put_new(opts, :plural_forms, default_nplurals)
 
     Keyword.put_new_lazy(opts, :plural_forms_header, fn ->
       requested_nplurals = Keyword.fetch!(opts, :plural_forms)
 
-      default_nplurals = plural_mod.nplurals(Plural.plural_info(locale, messages, plural_mod))
-
       # If nplurals is overridden to a non-default value by the user the
       # implementation will not be able to provide a correct header therefore
       # the header is just set to `nplurals=#{n}` and it is up to the user to
-      # put a complete plural forms header himself.
+      # put a complete plural forms header themselves.
       if requested_nplurals == default_nplurals do
         Plural.plural_forms_header_impl(locale, messages, plural_mod)
       else

@@ -71,7 +71,9 @@ defmodule Gettext.Plural do
   or you can set it for each specific backend when you call `use Gettext`:
 
       defmodule MyApp.Gettext do
-        use Gettext, otp_app: :my_app, plural_forms: MyApp.Plural
+        use Gettext.Backend,
+          otp_app: :my_app,
+          plural_forms: MyApp.Plural
       end
 
   > #### Compile-time Configuration {: .warning}
@@ -248,14 +250,6 @@ defmodule Gettext.Plural do
 
   # Behaviour implementation.
 
-  defmacrop ends_in(n, digits) do
-    digits = List.wrap(digits)
-
-    quote do
-      rem(unquote(n), 10) in unquote(digits)
-    end
-  end
-
   # Default implementation of the init/1 callback, in case the user uses
   # Gettext.Plural as their plural forms module.
   @doc false
@@ -267,10 +261,33 @@ defmodule Gettext.Plural do
         {locale, plural_forms}
 
       {:error, _reason} ->
+        message_about_header =
+          case Expo.PluralForms.plural_form(locale) do
+            {:ok, plural_form} ->
+              """
+
+              For the #{inspect(locale)} locale, you can use the following header:
+
+              #{Expo.PluralForms.to_string(plural_form)}
+              """
+
+            :error ->
+              ""
+          end
+
         # Fall back to parsing headers such as "nplurals=3", without the "plural=..." part.
-        # TODO: remove this at some point.
+        # TODO: remove this in v0.24.0
         with "nplurals=" <> rest <- String.trim(plural_forms_header),
              {plural_forms, _rest} <- Integer.parse(rest) do
+          IO.warn("""
+          Plural-Forms headers in the form "nplurals=<int>" (without the "plural=<rule>" part \
+          following) are invalid and support for them will be removed in future Gettext \
+          versions. Make sure to use a complete Plural-Forms header, which also specifies \
+          the pluralization rules, or remove the Plural-Forms header completely. If you \
+          do the latter, Gettext will use its built-in pluralization rules for the languages \
+          it knows about (see Gettext.Plural).#{message_about_header}\
+          """)
+
           {locale, plural_forms}
         else
           _other -> locale
@@ -327,6 +344,15 @@ defmodule Gettext.Plural do
     end
   end
 
+  def plural_forms_header(locale) do
+    case Expo.PluralForms.plural_form(locale) do
+      {:ok, plural_form} -> Expo.PluralForms.to_string(plural_form)
+      :error -> recall_if_territory_or_raise(locale, &plural_forms_header(&1))
+    end
+  rescue
+    UnknownLocaleError -> nil
+  end
+
   defp recall_if_territory_or_raise(locale, fun) do
     case String.split(locale, "_", parts: 2, trim: true) do
       [lang, _territory] -> fun.(lang)
@@ -336,7 +362,7 @@ defmodule Gettext.Plural do
 
   @doc false
   def plural_info(locale, messages_struct, plural_mod) do
-    ensure_loaded!(plural_mod)
+    Code.ensure_compiled!(plural_mod)
 
     if function_exported?(plural_mod, :init, 1) do
       pluralization_context =
@@ -353,7 +379,7 @@ defmodule Gettext.Plural do
 
   @doc false
   def plural_forms_header_impl(locale, messages_struct, plural_mod) do
-    ensure_loaded!(plural_mod)
+    Code.ensure_compiled!(plural_mod)
 
     plural_forms_header =
       if function_exported?(plural_mod, :plural_forms_header, 1) do
@@ -365,22 +391,6 @@ defmodule Gettext.Plural do
     else
       nplurals = plural_mod.nplurals(plural_info(locale, messages_struct, plural_mod))
       "nplurals=#{nplurals}"
-    end
-  end
-
-  # TODO: remove when we depend on Elixir 1.12+
-  if function_exported?(Code, :ensure_loaded!, 1) do
-    defp ensure_loaded!(mod), do: Code.ensure_loaded!(mod)
-  else
-    defp ensure_loaded!(mod) do
-      case Code.ensure_loaded(mod) do
-        {:module, ^mod} ->
-          mod
-
-        {:error, reason} ->
-          raise ArgumentError,
-                "could not load module #{inspect(mod)} due to reason #{inspect(reason)}"
-      end
     end
   end
 end

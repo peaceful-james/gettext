@@ -2,8 +2,9 @@ defmodule Mix.Tasks.Gettext.ExtractTest do
   use ExUnit.Case
 
   import ExUnit.CaptureIO
+  import GettextTest.MixProjectHelpers
 
-  @priv_path "../../../tmp/gettext.extract" |> Path.expand(__DIR__) |> Path.relative_to_cwd()
+  @moduletag :tmp_dir
 
   setup_all do
     # To suppress the `redefining module MyApp` warnings for the test modules
@@ -11,34 +12,28 @@ defmodule Mix.Tasks.Gettext.ExtractTest do
     :ok
   end
 
-  setup do
-    File.rm_rf!(tmp_path("/"))
+  test "extracting and extracting with --merge", %{test: test, tmp_dir: tmp_dir} = context do
+    create_test_mix_file(context)
 
-    :ok
-  end
-
-  test "extracting and extracting with --merge", %{test: test} do
-    create_test_mix_file(test)
-
-    write_file("lib/my_app.ex", """
+    write_file(context, "lib/my_app.ex", """
     defmodule MyApp.Gettext do
-      use Gettext, otp_app: #{inspect(test)}
+      use Gettext.Backend, otp_app: #{inspect(test)}
     end
 
     defmodule MyApp do
-      require MyApp.Gettext
-      def foo(), do: MyApp.Gettext.gettext("hello")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: gettext("hello")
     end
     """)
 
     output =
       capture_io(fn ->
-        Mix.Project.in_project(test, tmp_path("/"), fn _module -> run([]) end)
+        in_project(test, tmp_dir, fn _module -> run([]) end)
       end)
 
     assert output =~ "Extracted priv/gettext/default.pot"
 
-    assert read_file("priv/gettext/default.pot") =~ """
+    assert read_file(context, "priv/gettext/default.pot") =~ """
            #: lib/my_app.ex:7
            #, elixir-autogen, elixir-format
            msgid "hello"
@@ -47,45 +42,50 @@ defmodule Mix.Tasks.Gettext.ExtractTest do
 
     # Test --merge too.
 
-    write_file("lib/other.ex", """
+    write_file(context, "lib/other.ex", """
     defmodule MyApp.Other do
-      require MyApp.Gettext
-      def foo(), do: MyApp.Gettext.dgettext("my_domain", "other")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: dgettext("my_domain", "other")
     end
     """)
 
-    write_file("priv/gettext/it/LC_MESSAGES/my_domain.po", "")
+    write_file(context, "priv/gettext/it/LC_MESSAGES/my_domain.po", "")
 
     capture_io(fn ->
-      Mix.Project.in_project(test, tmp_path("/"), fn _module -> run(["--merge"]) end)
+      in_project(test, tmp_dir, fn _module -> run(["--merge"]) end)
     end)
 
-    assert read_file("priv/gettext/it/LC_MESSAGES/my_domain.po") == """
+    assert read_file(context, "priv/gettext/it/LC_MESSAGES/my_domain.po") == """
            #: lib/other.ex:3
            #, elixir-autogen, elixir-format
            msgid "other"
            msgstr ""
            """
+
+    capture_io(fn ->
+      in_project(test, tmp_dir, fn _module -> run(["--merge"]) end)
+    end) =~ "Wrote priv/gettext/it/LC_MESSAGES/my_domain.po"
   end
 
-  test "--check-up-to-date should fail if no POT files have been created", %{test: test} do
-    create_test_mix_file(test)
+  test "--check-up-to-date should fail if no POT files have been created",
+       %{test: test, tmp_dir: tmp_dir} = context do
+    create_test_mix_file(context)
 
-    write_file("lib/my_app.ex", """
+    write_file(context, "lib/my_app.ex", """
     defmodule MyApp.Gettext do
-    use Gettext, otp_app: #{inspect(test)}
+      use Gettext.Backend, otp_app: #{inspect(test)}
     end
 
     defmodule MyApp do
-    require MyApp.Gettext
-    def foo(), do: MyApp.Gettext.gettext("hello")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: gettext("hello")
     end
     """)
 
-    write_file("lib/other.ex", """
+    write_file(context, "lib/other.ex", """
     defmodule MyApp.Other do
-      require MyApp.Gettext
-      def foo(), do: MyApp.Gettext.dgettext("my_domain", "other")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: dgettext("my_domain", "other")
     end
     """)
 
@@ -99,71 +99,73 @@ defmodule Mix.Tasks.Gettext.ExtractTest do
 
     capture_io(fn ->
       assert_raise Mix.Error, expected_message, fn ->
-        Mix.Project.in_project(test, tmp_path("/"), fn _module ->
+        in_project(test, tmp_dir, fn _module ->
           run(["--check-up-to-date"])
         end)
       end
     end)
   end
 
-  test "--check-up-to-date should pass if nothing changed", %{test: test} do
-    create_test_mix_file(test, write_reference_comments: false)
+  test "--check-up-to-date should pass if nothing changed",
+       %{test: test, tmp_dir: tmp_dir} = context do
+    create_test_mix_file(context, write_reference_comments: false)
 
-    write_file("lib/my_app.ex", """
+    write_file(context, "lib/my_app.ex", """
     defmodule MyApp.Gettext do
-      use Gettext, otp_app: #{inspect(test)}
+      use Gettext.Backend, otp_app: #{inspect(test)}
     end
 
     defmodule MyApp do
-      require MyApp.Gettext
-      def foo(), do: MyApp.Gettext.gettext("hello")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: gettext("hello")
     end
     """)
 
     capture_io(fn ->
-      Mix.Project.in_project(test, tmp_path("/"), fn _module ->
+      in_project(test, tmp_dir, fn _module ->
         run([])
       end)
 
-      Mix.Project.in_project(test, tmp_path("/"), fn _module ->
+      in_project(test, tmp_dir, fn _module ->
         run(["--check-up-to-date"])
       end)
     end)
   end
 
-  test "--check-up-to-date should fail if POT files are outdated", %{test: test} do
-    create_test_mix_file(test)
+  test "--check-up-to-date should fail if POT files are outdated",
+       %{test: test, tmp_dir: tmp_dir} = context do
+    create_test_mix_file(context)
 
-    write_file("lib/my_app.ex", """
+    write_file(context, "lib/my_app.ex", """
     defmodule MyApp.Gettext do
-    use Gettext, otp_app: #{inspect(test)}
+      use Gettext.Backend, otp_app: #{inspect(test)}
     end
 
     defmodule MyApp do
-    require MyApp.Gettext
-    def foo(), do: MyApp.Gettext.gettext("hello")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: gettext("hello")
     end
     """)
 
-    write_file("lib/other.ex", """
+    write_file(context, "lib/other.ex", """
     defmodule MyApp.Other do
-      require MyApp.Gettext
-      def foo(), do: MyApp.Gettext.dgettext("my_domain", "other")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: dgettext("my_domain", "other")
     end
     """)
 
     capture_io(fn ->
-      Mix.Project.in_project(test, tmp_path("/"), fn _module -> run([]) end)
+      in_project(test, tmp_dir, fn _module -> run([]) end)
     end)
 
-    write_file("lib/my_app.ex", """
+    write_file(context, "lib/my_app.ex", """
     defmodule MyApp.Gettext do
-    use Gettext, otp_app: #{inspect(test)}
+      use Gettext.Backend, otp_app: #{inspect(test)}
     end
 
     defmodule MyApp do
-    require MyApp.Gettext
-    def foo(), do: MyApp.Gettext.gettext("new text")
+      use Gettext, backend: MyApp.Gettext
+      def foo(), do: gettext("hello world")
     end
     """)
 
@@ -176,41 +178,11 @@ defmodule Mix.Tasks.Gettext.ExtractTest do
 
     capture_io(fn ->
       assert_raise Mix.Error, expected_message, fn ->
-        Mix.Project.in_project(test, tmp_path("/"), fn _module ->
+        in_project(test, tmp_dir, fn _module ->
           run(["--check-up-to-date"])
         end)
       end
     end)
-  end
-
-  defp create_test_mix_file(test, gettext_config \\ []) do
-    write_file("mix.exs", """
-    defmodule MyApp.MixProject do
-      use Mix.Project
-
-      def project() do
-        [app: #{inspect(test)}, version: "0.1.0", gettext: #{inspect(gettext_config)}]
-      end
-
-      def application() do
-        [extra_applications: [:logger, :gettext]]
-      end
-    end
-    """)
-  end
-
-  defp write_file(path, contents) do
-    path = tmp_path(path)
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, contents)
-  end
-
-  defp read_file(path) do
-    path |> tmp_path() |> File.read!()
-  end
-
-  defp tmp_path(path) do
-    Path.join(@priv_path, path)
   end
 
   defp run(args) do

@@ -8,25 +8,31 @@ on:
 
 jobs:
   test:
-    name: Test (Elixir ${{matrix.elixir}} | Erlang/OTP ${{matrix.erlang}})
-    runs-on: ubuntu-20.04
+    name: Test (Elixir ${{ matrix.elixir }} | Erlang/OTP ${{ matrix.erlang }})
+    runs-on: "${{ matrix.os }}"
     strategy:
       fail-fast: false
       matrix:
         include:
-          - erlang: "25.2"
-            elixir: "1.14.2"
+          - os: ubuntu-22.04
+            erlang: "27.2"
+            elixir: "1.18"
             lint: true
             coverage: true
-          - erlang: "24.1"
+
+          - os: ubuntu-20.04
+            erlang: "24.1"
             elixir: "1.13"
-          - erlang: "22.2"
-            elixir: "1.11"
+
+          - os: ubuntu-20.04
+            erlang: "23.3"
+            elixir: "1.12"
     env:
+      MIX_ENV: test
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install OTP and Elixir
         uses: erlef/setup-beam@v1
@@ -35,7 +41,7 @@ jobs:
           elixir-version: ${{ matrix.elixir }}
 
       - name: Install dependencies
-        run: mix deps.get
+        run: mix deps.get --check-locked
 
       - name: Check no unused dependencies
         run: mix deps.unlock --check-unused

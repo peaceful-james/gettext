@@ -100,9 +100,10 @@ defmodule Mix.Tasks.Gettext.Merge do
       match. Overrides the global `:fuzzy_threshold` option (see the docs for
       `Gettext` for more information on this option).
 
-    * `--plural-forms` - an integer strictly greater than `0`. If this is passed,
-      new messages in the target PO files will have this number of empty
-      plural forms. See the "Plural forms" section above.
+    * `--plural-forms` - (**deprecated in v0.22.0**) an integer strictly greater than `0`.
+      If this is passed, new messages in the target PO files will have this number of empty
+      plural forms. This is deprecated in favor of passing the `--plural-forms-header`,
+      which contains the whole plural-forms specification. See the "Plural forms" section above.
 
     * `--plural-forms-header` - the content of the `Plural-Forms` header as a string.
       If this is passed, new messages in the target PO files will use this content
@@ -126,7 +127,6 @@ defmodule Mix.Tasks.Gettext.Merge do
     locale: :string,
     fuzzy: :boolean,
     fuzzy_threshold: :float,
-    plural_forms: :integer,
     plural_forms_header: :string,
     on_obsolete: :string,
     store_previous_message_on_fuzzy_match: :boolean
@@ -134,6 +134,8 @@ defmodule Mix.Tasks.Gettext.Merge do
 
   @impl true
   def run(args) do
+    Mix.Task.run("loadpaths")
+
     _ = Mix.Project.get!()
     gettext_config = Mix.Project.config()[:gettext] || []
 
@@ -233,7 +235,13 @@ defmodule Mix.Tasks.Gettext.Merge do
 
   defp merge_files(po_file, pot_file, locale, opts, gettext_config) do
     {merged, stats} =
-      Merger.merge(PO.parse_file!(po_file), PO.parse_file!(pot_file), locale, opts)
+      Merger.merge(
+        PO.parse_file!(po_file),
+        PO.parse_file!(pot_file),
+        locale,
+        opts,
+        gettext_config
+      )
 
     {merged
      |> Merger.prune_references(gettext_config)
@@ -284,7 +292,6 @@ defmodule Mix.Tasks.Gettext.Merge do
       |> Keyword.take([
         :fuzzy,
         :fuzzy_threshold,
-        :plural_forms,
         :plural_forms_header,
         :on_obsolete,
         :store_previous_message_on_fuzzy_match

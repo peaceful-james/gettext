@@ -68,9 +68,13 @@ defmodule Gettext.Compiler do
         Gettext.ExtractorAgent.add_backend(__MODULE__)
       end
 
-      unquote(macros())
+      # These are the two functions we generate inside the backend.
 
-      unquote(public_functions(repo, repo_opts, interpolation))
+      @impl Gettext.Backend
+      def lgettext(locale, domain, msgctxt \\ nil, msgid, bindings)
+
+      @impl Gettext.Backend
+      def lngettext(locale, domain, msgctxt \\ nil, msgid, msgid_plural, n, bindings)
 
       unquote(compile_po_files(env, known_po_files, opts))
 
@@ -100,7 +104,10 @@ defmodule Gettext.Compiler do
     end)
   end
 
-  defp macros() do
+  ## BEGIN of deprecated code
+  ## TODO: Remove this block once "use Gettext" is removed
+
+  defmacro generate_macros(_env) do
     quote unquote: false do
       defmacro dpgettext_noop(domain, msgctxt, msgid) do
         domain = Gettext.Compiler.expand_to_binary(domain, "domain", __MODULE__, __CALLER__)
@@ -317,56 +324,8 @@ defmodule Gettext.Compiler do
     end
   end
 
-  defp public_functions(nil = _repo, _repo_opts, _interpolation) do
-    quote do
-      def lgettext(locale, domain, msgctxt \\ nil, msgid, bindings) do
-        lgettext_compiled(locale, domain, msgctxt, msgid, bindings)
-      end
-
-      def lngettext(locale, domain, msgctxt \\ nil, msgid, msgid_plural, n, bindings) do
-        lngettext_compiled(locale, domain, msgctxt, msgid, msgid_plural, n, bindings)
-      end
-    end
-  end
-
-  defp public_functions(repo, repo_opts, interpolation) do
-    quote do
-      def lgettext(locale, domain, msgctxt, msgid, bindings) do
-        case unquote(repo).get_translation(locale, domain, msgctxt, msgid, unquote(repo_opts)) do
-          {:ok, msgstr} ->
-            unquote(interpolation).runtime_interpolate(msgstr, bindings)
-
-          _ ->
-            lgettext_compiled(locale, domain, msgctxt, msgid, bindings)
-        end
-      end
-
-      def lngettext(locale, domain, msgctxt, msgid, msgid_plural, n, bindings) do
-        case unquote(repo).get_plural_translation(
-               locale,
-               domain,
-               msgctxt,
-               msgid,
-               msgid_plural,
-               n,
-               unquote(repo_opts)
-             ) do
-          {:ok, msgstr} ->
-            bindings = Map.put(bindings, :count, n)
-            unquote(interpolation).runtime_interpolate(msgstr, bindings)
-
-          _ ->
-            lngettext_compiled(locale, domain, msgctxt, msgid, msgid_plural, n, bindings)
-        end
-      end
-    end
-  end
-
-  @doc """
-  Expands the given `msgid` in the given `env`, raising if it doesn't expand to
-  a binary.
-  """
-  @spec expand_to_binary(binary, binary, module, Macro.Env.t()) :: binary | no_return
+  @doc false
+  # TODO: remove me
   def expand_to_binary(term, what, gettext_module, env)
       when what in ~w(domain msgctxt msgid msgid_plural comment) do
     raiser = fn term ->
@@ -401,24 +360,19 @@ defmodule Gettext.Compiler do
     end
   end
 
-  @doc """
-  Appends the given comment to the list of extracted comments in the process dictionary.
-  """
-  @spec append_extracted_comment(binary) :: :ok
+  @doc false
   def append_extracted_comment(comment) do
     existing = Process.get(:gettext_comments, [])
     Process.put(:gettext_comments, [" " <> comment | existing])
     :ok
   end
 
-  @doc """
-  Returns all extracted comments in the process dictionary and clears them from the process
-  dictionary.
-  """
-  @spec get_and_flush_extracted_comments() :: [binary]
+  @doc false
   def get_and_flush_extracted_comments() do
     Enum.reverse(Process.delete(:gettext_comments) || [])
   end
+
+  ## END of deprecated block
 
   @doc """
   Logs a warning via `Logger.error/1` if `domain` contains slashes.
@@ -568,9 +522,11 @@ defmodule Gettext.Compiler do
   # lngettext/7 (for plural messages) clauses.
   defp compile_po_file(kind, po_file, env, plural_mod, interpolation_module) do
     %{locale: locale, domain: domain, path: path} = po_file
-    %Messages{messages: messages, file: file} = messages_struct = PO.parse_file!(path)
 
-    plural_forms_fun = :"{locale}_#{domain}_plural"
+    %Messages{messages: messages, file: file} =
+      messages_struct = PO.parse_file!(path, strip_meta: true)
+
+    plural_forms_fun = :"#{locale}_#{domain}_plural"
 
     plural_forms = compile_plural_forms(locale, messages_struct, plural_mod, plural_forms_fun)
     nplurals = nplurals(locale, messages_struct, plural_mod)
@@ -688,7 +644,7 @@ defmodule Gettext.Compiler do
          kind,
          locale,
          %Message.Plural{} = message,
-         _singular_fun,
+         singular_fun,
          plural_fun,
          file,
          {plural_forms_fun, nplurals},
@@ -731,22 +687,54 @@ defmodule Gettext.Compiler do
               line: unquote(Message.source_line_number(message, :msgid))
         end
 
-      quote generated: true do
-        Kernel.unquote(kind)(
-          unquote(plural_fun)(
-            unquote(msgctxt),
-            unquote(msgid),
-            unquote(msgid_plural),
-            n,
-            bindings
-          )
-        ) do
-          plural_form = unquote(plural_forms_fun)(n)
+      singular_fun_impl =
+        msgstr
+        |> Enum.find(&match?({0, _msgstr}, &1))
+        |> case do
+          {0, ""} ->
+            nil
 
-          var!(bindings) = Map.put(bindings, :count, n)
+          {0, msgstr} ->
+            quote do
+              Kernel.unquote(kind)(
+                unquote(singular_fun)(unquote(msgctxt), unquote(msgid), bindings)
+              ) do
+                require unquote(interpolation_module)
 
-          case plural_form, do: unquote(clauses ++ error_clause)
+                unquote(interpolation_module).compile_interpolate(
+                  :translation,
+                  unquote(msgstr),
+                  bindings
+                )
+              end
+            end
+
+          nil ->
+            nil
         end
+
+      plural_fun_impl =
+        quote generated: true do
+          Kernel.unquote(kind)(
+            unquote(plural_fun)(
+              unquote(msgctxt),
+              unquote(msgid),
+              unquote(msgid_plural),
+              n,
+              bindings
+            )
+          ) do
+            plural_form = unquote(plural_forms_fun)(n)
+
+            var!(bindings) = Map.put(bindings, :count, n)
+
+            case plural_form, do: unquote(clauses ++ error_clause)
+          end
+        end
+
+      quote do
+        unquote(singular_fun_impl)
+        unquote(plural_fun_impl)
       end
     end
   end

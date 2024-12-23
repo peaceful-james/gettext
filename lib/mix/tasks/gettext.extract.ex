@@ -75,7 +75,7 @@ defmodule Mix.Tasks.Gettext.Extract do
   end
 
   defp run_message_extraction(pot_files, opts, args) do
-    for {path, contents} <- pot_files do
+    for {path, {:changed, contents}} <- pot_files do
       File.mkdir_p!(Path.dirname(path))
       File.write!(path, contents)
       Mix.shell().info("Extracted #{Path.relative_to_cwd(path)}")
@@ -89,9 +89,9 @@ defmodule Mix.Tasks.Gettext.Extract do
   end
 
   defp run_up_to_date_check(pot_files) do
-    not_extracted_paths = for {path, _contents} <- pot_files, do: path
+    not_extracted_paths = for {path, {:changed, _contents}} <- pot_files, do: path
 
-    if pot_files == [] do
+    if not_extracted_paths == [] do
       :ok
     else
       Mix.raise("""
@@ -112,7 +112,8 @@ defmodule Mix.Tasks.Gettext.Extract do
   end
 
   defp force_compile do
-    Enum.map(Mix.Tasks.Compile.Elixir.manifests(), &make_old_if_exists/1)
+    Mix.Tasks.Compile.Elixir.clean()
+    Enum.each(Mix.Tasks.Compile.Elixir.manifests(), &File.rm/1)
 
     # If "compile" was never called, the reenabling is a no-op and
     # "compile.elixir" is a no-op as well (because it wasn't reenabled after
@@ -122,10 +123,6 @@ defmodule Mix.Tasks.Gettext.Extract do
     Mix.Task.reenable("compile.elixir")
     Mix.Task.run("compile")
     Mix.Task.run("compile.elixir", ["--force"])
-  end
-
-  defp make_old_if_exists(path) do
-    :file.change_time(path, {{2000, 1, 1}, {0, 0, 0}})
   end
 
   defp run_merge(pot_files, argv) do
